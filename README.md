@@ -31,15 +31,16 @@ attendance-management/
 │   └── .gitignore              # Frontend固有の除外設定
 ├── infrastructure/              # AWS インフラ設定
 │   ├── cloudformation/         # CloudFormation テンプレート
-│   ├── deploy-production.sh    # 本番デプロイスクリプト
 │   ├── security-scan.sh        # セキュリティスキャン
 │   └── .gitignore              # Infrastructure固有の除外設定
 ├── .kiro/                      # Kiro IDE 設定
 │   └── specs/                  # 仕様書・タスク管理
 ├── .gitignore                  # プロジェクト全体の除外設定
-├── deploy-to-aws.sh            # クイックデプロイスクリプト
-├── AWS-PRODUCTION-DEPLOYMENT.md # 詳細デプロイ手順
-├── QUICK-DEPLOY-GUIDE.md       # クイックデプロイガイド
+├── buildspec.yml               # CodeBuild ビルド設定
+├── setup-cicd.sh               # CI/CDセットアップ (Linux/macOS)
+├── setup-cicd.bat              # CI/CDセットアップ (Windows Batch)
+├── setup-cicd.ps1              # CI/CDセットアップ (Windows PowerShell)
+├── CICD-GUIDE.md               # CI/CDガイド
 └── README.md                   # このファイル
 ```
 
@@ -72,19 +73,30 @@ cd ../frontend
 npm run dev
 ```
 
-### AWS 本番環境デプロイ
+### CI/CD パイプライン セットアップ
+
+#### Linux/macOS
 
 ```bash
-# 環境変数設定
-export AWS_REGION=ap-northeast-1
-export DB_PASSWORD=$(openssl rand -base64 32)
-export ALERT_EMAIL=admin@yourdomain.com
+# CI/CDパイプライン作成
+./setup-cicd.sh -g your-org/attendance-management -t YOUR_GITHUB_TOKEN
+```
 
-# クイックデプロイ
-./deploy-to-aws.sh
+#### Windows
 
-# または詳細デプロイ手順に従う
-# 詳細: AWS-PRODUCTION-DEPLOYMENT.md
+```cmd
+# Batch版
+setup-cicd.bat -g your-org/attendance-management -t YOUR_GITHUB_TOKEN
+
+# PowerShell版
+.\setup-cicd.ps1 -GitHubRepo "your-org/attendance-management" -GitHubToken "YOUR_GITHUB_TOKEN"
+```
+
+#### 自動デプロイ開始
+
+```bash
+# GitHubにプッシュして自動デプロイ開始
+git push origin main
 ```
 
 ## 🧪 テスト
@@ -159,12 +171,11 @@ npm run test:integration
 - **テスト**: Vitest + Playwright
 - **リンター**: ESLint + Prettier
 - **型チェック**: TypeScript
-- **CI/CD**: GitHub Actions 対応
+- **CI/CD**: CodePipeline + CodeBuild
 
 ## 📚 ドキュメント
 
-- [AWS 本番デプロイ手順](AWS-PRODUCTION-DEPLOYMENT.md)
-- [クイックデプロイガイド](QUICK-DEPLOY-GUIDE.md)
+- [CI/CD パイプラインガイド](CICD-GUIDE.md)
 - [統合テストレポート](frontend/test-integration-report.md)
 - [仕様書](.kiro/specs/attendance-management/)
 
@@ -172,13 +183,18 @@ npm run test:integration
 
 ### 最小構成（開発・テスト）
 
-- 月額約 $30
+- RDS t3.micro: $15
+- Lambda: $5
+- S3 + CloudFront: $10
+- **合計: 約$30/月**
 
 ### 本番推奨構成
 
-- 月額約 $100
-
-詳細は [QUICK-DEPLOY-GUIDE.md](QUICK-DEPLOY-GUIDE.md) を参照
+- RDS t3.small + Multi-AZ: $50
+- Lambda + API Gateway: $20
+- S3 + CloudFront: $15
+- ElastiCache: $15
+- **合計: 約$100/月**
 
 ## 🤝 コントリビューション
 

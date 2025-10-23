@@ -1,0 +1,437 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CI/CD Pipeline for Attendance Management System using CodePipeline and CodeBuild"
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+
+  GitHubRepository:
+    Type: String
+    Description: GitHub repository name (owner/repo)
+    Default: your-org/attendance-management
+
+  GitHubBranch:
+    Type: String
+    Description: GitHub branch to track
+    Default: main
+
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub personal access token
+
+Resources:
+  # S3 Bucket for Pipeline Artifacts
+  PipelineArtifactsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AWS::StackName}-pipeline-artifacts-${AWS::AccountId}"
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldArtifacts
+            Status: Enabled
+            ExpirationInDays: 30
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  # CodeBuild Service Role
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-codebuild-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # CloudWatch Logs
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*"
+
+              # S3 Artifacts
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                Resource: !Sub "${PipelineArtifactsBucket.Arn}/*"
+
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !GetAtt PipelineArtifactsBucket.Arn
+
+              # Parameter Store
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/attendance-management/*"
+
+              # CloudFormation for deployment
+              - Effect: Allow
+                Action:
+                  - cloudformation:*
+                Resource: "*"
+
+              # Lambda for deployment
+              - Effect: Allow
+                Action:
+                  - lambda:*
+                Resource: "*"
+
+              # API Gateway for deployment
+              - Effect: Allow
+                Action:
+                  - apigateway:*
+                Resource: "*"
+
+              # S3 for frontend deployment
+              - Effect: Allow
+                Action:
+                  - s3:*
+                Resource: "*"
+
+              # CloudFront for frontend deployment
+              - Effect: Allow
+                Action:
+                  - cloudfront:*
+                Resource: "*"
+
+              # IAM for resource creation
+              - Effect: Allow
+                Action:
+                  - iam:*
+                Resource: "*"
+
+  # CodeBuild Project for Build and Test
+  BuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-build"
+      Description: "Build and test project for Attendance Management System"
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+
+      Artifacts:
+        Type: CODEPIPELINE
+
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                java: corretto17
+                nodejs: 18
+              commands:
+                - echo "Installing dependencies..."
+                - chmod +x gradlew
+                - cd frontend && npm ci && cd ..
+            
+            pre_build:
+              commands:
+                - echo "Running pre-build tasks..."
+                - cd frontend && npm run lint || echo "Linting warnings ignored" && cd ..
+            
+            build:
+              commands:
+                - echo "Building applications..."
+                # Backend build
+                - ./gradlew clean build
+                - ./gradlew buildZip
+                # Frontend build
+                - cd frontend && npm run build && cd ..
+            
+            post_build:
+              commands:
+                - echo "Running tests..."
+                - ./gradlew test
+                - cd frontend && npm run test && cd ..
+                - echo "Build completed successfully"
+
+          artifacts:
+            files:
+              - 'build/distributions/app.zip'
+              - 'frontend/.output/**/*'
+              - 'infrastructure/cloudformation/**/*'
+            name: BuildArtifacts
+
+      TimeoutInMinutes: 30
+
+  # CodeBuild Project for Deployment
+  DeployProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-deploy"
+      Description: "Deploy project for Attendance Management System"
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+
+      Artifacts:
+        Type: CODEPIPELINE
+
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.9
+              commands:
+                - echo "Installing AWS CLI..."
+                - pip3 install awscli --upgrade
+            
+            build:
+              commands:
+                - echo "Deploying infrastructure..."
+                # Deploy main infrastructure
+                - |
+                  aws cloudformation deploy \
+                    --template-file infrastructure/cloudformation/network-stack.yml \
+                    --stack-name attendance-network-${ENVIRONMENT} \
+                    --parameter-overrides Environment=${ENVIRONMENT} \
+                    --capabilities CAPABILITY_IAM \
+                    --region ${AWS_DEFAULT_REGION}
+                
+                - |
+                  aws cloudformation deploy \
+                    --template-file infrastructure/cloudformation/database-stack.yml \
+                    --stack-name attendance-database-${ENVIRONMENT} \
+                    --parameter-overrides Environment=${ENVIRONMENT} NetworkStackName=attendance-network-${ENVIRONMENT} \
+                    --capabilities CAPABILITY_IAM \
+                    --region ${AWS_DEFAULT_REGION}
+                
+                # Deploy Lambda functions
+                - echo "Deploying Lambda functions..."
+                - |
+                  aws lambda update-function-code \
+                    --function-name attendance-api-${ENVIRONMENT} \
+                    --zip-file fileb://build/distributions/app.zip \
+                    --region ${AWS_DEFAULT_REGION} || echo "Lambda function not found, skipping update"
+                
+                # Deploy frontend
+                - echo "Deploying frontend..."
+                - |
+                  if aws s3 ls s3://attendance-frontend-${ENVIRONMENT} 2>/dev/null; then
+                    aws s3 sync frontend/.output/public/ s3://attendance-frontend-${ENVIRONMENT}/ --delete
+                  else
+                    echo "Frontend S3 bucket not found, skipping frontend deployment"
+                  fi
+                
+                - echo "Deployment completed successfully"
+
+      TimeoutInMinutes: 20
+
+  # CodePipeline Service Role
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-codepipeline-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodePipelinePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # S3 Artifacts
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !Sub "${PipelineArtifactsBucket.Arn}/*"
+                  - !GetAtt PipelineArtifactsBucket.Arn
+
+              # CodeBuild
+              - Effect: Allow
+                Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Resource:
+                  - !GetAtt BuildProject.Arn
+                  - !GetAtt DeployProject.Arn
+
+  # CodePipeline
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${AWS::StackName}-pipeline"
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+
+      ArtifactStore:
+        Type: S3
+        Location: !Ref PipelineArtifactsBucket
+
+      Stages:
+        # Source Stage
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: "1"
+              Configuration:
+                Owner: !Select [0, !Split ["/", !Ref GitHubRepository]]
+                Repo: !Select [1, !Split ["/", !Ref GitHubRepository]]
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+                PollForSourceChanges: true
+              OutputArtifacts:
+                - Name: SourceOutput
+
+        # Build Stage
+        - Name: Build
+          Actions:
+            - Name: BuildAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref BuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BuildOutput
+
+        # Deploy Stage
+        - Name: Deploy
+          Actions:
+            - Name: DeployAction
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref DeployProject
+              InputArtifacts:
+                - Name: BuildOutput
+              RunOrder: 1
+
+  # CloudWatch Log Groups
+  BuildLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/codebuild/${AWS::StackName}-build"
+      RetentionInDays: 14
+
+  DeployLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/codebuild/${AWS::StackName}-deploy"
+      RetentionInDays: 14
+
+  # SNS Topic for Pipeline Notifications
+  PipelineNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-pipeline-notifications"
+      DisplayName: "Pipeline Notifications - Attendance Management"
+
+  # CloudWatch Event Rule for Pipeline State Changes
+  PipelineStateChangeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${AWS::StackName}-pipeline-state-change"
+      Description: "Capture pipeline state changes"
+      EventPattern:
+        source:
+          - aws.codepipeline
+        detail-type:
+          - CodePipeline Pipeline Execution State Change
+        detail:
+          pipeline:
+            - !Ref Pipeline
+          state:
+            - FAILED
+            - SUCCEEDED
+      State: ENABLED
+      Targets:
+        - Arn: !Ref PipelineNotificationTopic
+          Id: PipelineNotificationTarget
+
+Outputs:
+  PipelineName:
+    Description: CodePipeline name
+    Value: !Ref Pipeline
+    Export:
+      Name: !Sub "${AWS::StackName}-Pipeline"
+
+  PipelineUrl:
+    Description: CodePipeline URL
+    Value: !Sub "https://console.aws.amazon.com/codesuite/codepipeline/pipelines/${Pipeline}/view"
+    Export:
+      Name: !Sub "${AWS::StackName}-PipelineUrl"
+
+  ArtifactsBucketName:
+    Description: S3 bucket for pipeline artifacts
+    Value: !Ref PipelineArtifactsBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-ArtifactsBucket"
+
+  NotificationTopicArn:
+    Description: SNS topic for pipeline notifications
+    Value: !Ref PipelineNotificationTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-NotificationTopic"

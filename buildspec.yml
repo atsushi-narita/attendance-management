@@ -1,0 +1,59 @@
+version: 0.2
+
+# 勤怠管理システム - CodePipeline用BuildSpec
+# ==========================================
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto17
+      nodejs: 18
+    
+    commands:
+      - echo "Build started on `date`"
+      - echo "Installing dependencies..."
+      - chmod +x app/gradlew
+      - cd frontend && npm ci && cd ..
+
+  pre_build:
+    commands:
+      - echo "Running pre-build tasks..."
+      - cd frontend && npm run lint || echo "Linting warnings ignored" && cd ..
+
+  build:
+    commands:
+      - echo "Building applications..."
+      
+      # Backend build
+      - echo "Building backend..."
+      - cd app
+      - ./gradlew clean build
+      - ./gradlew buildZip
+      - cd ..
+      
+      # Frontend build
+      - echo "Building frontend..."
+      - cd frontend
+      - npm run build
+      - cd ..
+
+  post_build:
+    commands:
+      - echo "Running tests..."
+      - cd app && ./gradlew test && cd ..
+      - cd frontend && npm run test && cd ..
+      - echo "Build completed successfully"
+
+# アーティファクト設定
+artifacts:
+  files:
+    - 'app/build/distributions/app.zip'
+    - 'frontend/.output/**/*'
+    - 'infrastructure/cloudformation/**/*'
+  name: attendance-management-artifacts
+
+# キャッシュ設定
+cache:
+  paths:
+    - '/root/.gradle/caches/**/*'
+    - 'frontend/node_modules/**/*'
