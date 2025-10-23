@@ -259,22 +259,6 @@ Resources:
       GroupName: !Sub '${AWS::StackName}-lambda-sg'
       GroupDescription: Security group for Lambda functions
       VpcId: !Ref VPC
-      SecurityGroupEgress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
-          Description: HTTPS outbound
-        - IpProtocol: tcp
-          FromPort: 5432
-          ToPort: 5432
-          DestinationSecurityGroupId: !Ref DatabaseSecurityGroup
-          Description: PostgreSQL to RDS
-        - IpProtocol: tcp
-          FromPort: 6379
-          ToPort: 6379
-          DestinationSecurityGroupId: !Ref CacheSecurityGroup
-          Description: Redis to ElastiCache
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-lambda-sg'
@@ -287,12 +271,6 @@ Resources:
       GroupName: !Sub '${AWS::StackName}-db-sg'
       GroupDescription: Security group for RDS database
       VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 5432
-          ToPort: 5432
-          SourceSecurityGroupId: !Ref LambdaSecurityGroup
-          Description: PostgreSQL from Lambda
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-db-sg'
@@ -305,17 +283,14 @@ Resources:
       GroupName: !Sub '${AWS::StackName}-cache-sg'
       GroupDescription: Security group for ElastiCache
       VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 6379
-          ToPort: 6379
-          SourceSecurityGroupId: !Ref LambdaSecurityGroup
-          Description: Redis from Lambda
       Tags:
         - Key: Name
           Value: !Sub '${AWS::StackName}-cache-sg'
         - Key: Environment
           Value: !Ref Environment
+
+  # Note: Security group rules will be added later via separate stack or manual configuration
+  # to avoid circular dependency issues during initial deployment
 
 Outputs:
   VPC:
