@@ -1,0 +1,103 @@
+version: 0.2
+
+# インフラストラクチャデプロイメント用 BuildSpec
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.8
+    commands:
+      - echo "Installing AWS CLI and dependencies..."
+      - pip install --upgrade awscli boto3
+      - aws --version
+
+  pre_build:
+    commands:
+      - echo "Validating CloudFormation templates..."
+      - cd infrastructure
+      - |
+        for template in cloudformation/*.yaml; do
+          echo "Validating $template..."
+          aws cloudformation validate-template --template-body file://$template
+        done
+      - echo "All templates validated successfully"
+
+  build:
+    commands:
+      - echo "Deploying infrastructure stacks..."
+      - echo "Environment: $ENVIRONMENT"
+      - echo "Project: $PROJECT_NAME"
+      - echo "Region: $AWS_DEFAULT_REGION"
+      
+      # IAM ロールとリソースの先行デプロイ
+      - |
+        echo "Deploying IAM roles and resources..."
+        aws cloudformation deploy \
+          --template-file cloudformation/iam-roles-template.yaml \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-iam-roles \
+          --parameter-overrides file://parameters/${ENVIRONMENT}-parameters.json \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --region $AWS_DEFAULT_REGION \
+          --tags Environment=$ENVIRONMENT Project=$PROJECT_NAME
+      
+      # メインインフラストラクチャのデプロイ
+      - |
+        echo "Deploying main infrastructure..."
+        aws cloudformation deploy \
+          --template-file cloudformation/main-template.yaml \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-main \
+          --parameter-overrides file://parameters/${ENVIRONMENT}-parameters.json \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --region $AWS_DEFAULT_REGION \
+          --tags Environment=$ENVIRONMENT Project=$PROJECT_NAME
+      
+      # Cognito認証システムのデプロイ
+      - |
+        echo "Deploying Cognito authentication system..."
+        aws cloudformation deploy \
+          --template-file cloudformation/cognito-template.yaml \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-cognito \
+          --parameter-overrides file://parameters/${ENVIRONMENT}-parameters.json \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --region $AWS_DEFAULT_REGION \
+          --tags Environment=$ENVIRONMENT Project=$PROJECT_NAME
+      
+      # データベースのデプロイ
+      - |
+        echo "Deploying database..."
+        aws cloudformation deploy \
+          --template-file cloudformation/database-template.yaml \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-database \
+          --parameter-overrides file://parameters/${ENVIRONMENT}-parameters.json \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --region $AWS_DEFAULT_REGION \
+          --tags Environment=$ENVIRONMENT Project=$PROJECT_NAME
+      
+      # API Gateway と Lambda のデプロイ
+      - |
+        echo "Deploying API Gateway and Lambda..."
+        aws cloudformation deploy \
+          --template-file cloudformation/api-gateway-template.yaml \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-api \
+          --parameter-overrides file://parameters/${ENVIRONMENT}-parameters.json \
+          --capabilities CAPABILITY_NAMED_IAM \
+          --region $AWS_DEFAULT_REGION \
+          --tags Environment=$ENVIRONMENT Project=$PROJECT_NAME
+
+  post_build:
+    commands:
+      - echo "Infrastructure deployment completed successfully"
+      - |
+        echo "=== Deployment Summary ==="
+        API_URL=$(aws cloudformation describe-stacks --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-api --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' --output text)
+        USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-cognito --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' --output text)
+        USER_POOL_CLIENT_ID=$(aws cloudformation describe-stacks --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-cognito --query 'Stacks[0].Outputs[?OutputKey==`UserPoolClientId`].OutputValue' --output text)
+        
+        echo "API Gateway URL: $API_URL"
+        echo "Cognito User Pool ID: $USER_POOL_ID"
+        echo "Cognito User Pool Client ID: $USER_POOL_CLIENT_ID"
+
+artifacts:
+  files:
+    - '**/*'
+  name: infrastructure-artifacts

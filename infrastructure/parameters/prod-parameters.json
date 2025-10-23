@@ -1,0 +1,16 @@
+{
+  "Parameters": {
+    "Environment": "prod",
+    "ProjectName": "attendance-management",
+    "DatabasePassword": "ProductionPassword123!",
+    "DatabaseInstanceClass": "db.r5.large",
+    "GitHubRepo": "your-org/attendance-management",
+    "GitHubToken": "your-github-token-here"
+  },
+  "Tags": {
+    "Environment": "prod",
+    "Project": "attendance-management",
+    "Owner": "development-team",
+    "CostCenter": "engineering"
+  }
+}

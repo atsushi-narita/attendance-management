@@ -1,0 +1,144 @@
+version: 0.2
+
+# フロントエンド (Nuxt.js) ビルド用 BuildSpec
+
+phases:
+  install:
+    runtime-versions:
+      nodejs: 18
+    commands:
+      - echo "Installing Node.js dependencies..."
+      - cd frontend
+      - node --version
+      - npm --version
+      - echo "Installing dependencies with npm ci..."
+      - npm ci
+
+  pre_build:
+    commands:
+      - echo "Setting up environment variables..."
+      - |
+        echo "Fetching AWS resource information..."
+        
+        # CloudFormation スタックから必要な情報を取得
+        API_URL=$(aws cloudformation describe-stacks \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-api \
+          --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+          --output text)
+        
+        USER_POOL_ID=$(aws cloudformation describe-stacks \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-cognito \
+          --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' \
+          --output text)
+        
+        USER_POOL_CLIENT_ID=$(aws cloudformation describe-stacks \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-cognito \
+          --query 'Stacks[0].Outputs[?OutputKey==`UserPoolClientId`].OutputValue' \
+          --output text)
+        
+        IDENTITY_POOL_ID=$(aws cloudformation describe-stacks \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-cognito \
+          --query 'Stacks[0].Outputs[?OutputKey==`IdentityPoolId`].OutputValue' \
+          --output text)
+        
+        # 環境変数ファイルの作成
+        echo "Creating .env file..."
+        cat > .env << EOF
+        NUXT_PUBLIC_API_URL=$API_URL
+        NUXT_PUBLIC_USER_POOL_ID=$USER_POOL_ID
+        NUXT_PUBLIC_USER_POOL_CLIENT_ID=$USER_POOL_CLIENT_ID
+        NUXT_PUBLIC_IDENTITY_POOL_ID=$IDENTITY_POOL_ID
+        NUXT_PUBLIC_REGION=$AWS_DEFAULT_REGION
+        NUXT_PUBLIC_ENVIRONMENT=$ENVIRONMENT
+        NUXT_PUBLIC_PROJECT_NAME=$PROJECT_NAME
+        EOF
+        
+        echo "Environment variables configured:"
+        echo "API_URL: $API_URL"
+        echo "USER_POOL_ID: $USER_POOL_ID"
+        echo "USER_POOL_CLIENT_ID: $USER_POOL_CLIENT_ID"
+        echo "IDENTITY_POOL_ID: $IDENTITY_POOL_ID"
+        echo "REGION: $AWS_DEFAULT_REGION"
+        echo "ENVIRONMENT: $ENVIRONMENT"
+
+  build:
+    commands:
+      - echo "Running linting..."
+      - npm run lint
+      - echo "Running unit tests..."
+      - npm run test:unit
+      - echo "Building Nuxt.js application..."
+      - npm run build
+      - echo "Build completed successfully"
+      - ls -la .output/
+
+  post_build:
+    commands:
+      - echo "Deploying to S3..."
+      - |
+        # S3 バケット名を取得
+        BUCKET_NAME=$(aws cloudformation describe-stacks \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-iam-roles \
+          --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
+          --output text)
+        
+        echo "Deploying to S3 bucket: $BUCKET_NAME"
+        
+        # S3 に静的ファイルをアップロード
+        aws s3 sync .output/public/ s3://$BUCKET_NAME/ --delete --cache-control "max-age=31536000"
+        
+        # index.html は短いキャッシュ時間を設定
+        aws s3 cp .output/public/index.html s3://$BUCKET_NAME/index.html --cache-control "max-age=300"
+        
+        echo "S3 deployment completed"
+      
+      - echo "Invalidating CloudFront cache..."
+      - |
+        # CloudFront ディストリビューション ID を取得
+        DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-iam-roles \
+          --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
+          --output text)
+        
+        echo "Invalidating CloudFront distribution: $DISTRIBUTION_ID"
+        
+        # CloudFront キャッシュを無効化
+        aws cloudfront create-invalidation \
+          --distribution-id $DISTRIBUTION_ID \
+          --paths "/*"
+        
+        echo "CloudFront invalidation completed"
+      
+      - echo "Frontend deployment completed successfully"
+      - |
+        # デプロイ完了後の情報表示
+        CLOUDFRONT_DOMAIN=$(aws cloudformation describe-stacks \
+          --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-iam-roles \
+          --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDomainName`].OutputValue' \
+          --output text)
+        
+        echo "=== Frontend Deployment Summary ==="
+        echo "S3 Bucket: $BUCKET_NAME"
+        echo "CloudFront Distribution: $DISTRIBUTION_ID"
+        echo "Application URL: https://$CLOUDFRONT_DOMAIN"
+
+artifacts:
+  files:
+    - 'frontend/.output/**/*'
+    - 'frontend/coverage/**/*'
+  name: frontend-artifacts
+
+reports:
+  jest:
+    files:
+      - 'frontend/coverage/junit.xml'
+    file-format: JUNITXML
+  coverage:
+    files:
+      - 'frontend/coverage/lcov.info'
+    file-format: CLOVERXML
+
+cache:
+  paths:
+    - 'frontend/node_modules/**/*'
+    - 'frontend/.nuxt/**/*'

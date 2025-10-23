@@ -1,0 +1,309 @@
+# 勤怠管理ツール - カスタムメトリクス定義
+
+# アプリケーションレベルのメトリクス定義
+custom_metrics:
+  # 勤怠関連メトリクス
+  attendance:
+    - name: clock_in_success
+      description: 出勤打刻成功数
+      unit: Count
+      dimensions:
+        - employee_id
+        - department
+    
+    - name: clock_in_failure
+      description: 出勤打刻失敗数
+      unit: Count
+      dimensions:
+        - employee_id
+        - error_type
+    
+    - name: clock_out_success
+      description: 退勤打刻成功数
+      unit: Count
+      dimensions:
+        - employee_id
+        - department
+    
+    - name: clock_out_failure
+      description: 退勤打刻失敗数
+      unit: Count
+      dimensions:
+        - employee_id
+        - error_type
+    
+    - name: working_hours_daily
+      description: 日別勤務時間
+      unit: Seconds
+      dimensions:
+        - employee_id
+        - date
+    
+    - name: working_hours_monthly
+      description: 月別勤務時間
+      unit: Seconds
+      dimensions:
+        - employee_id
+        - year_month
+
+  # 修正申請関連メトリクス
+  corrections:
+    - name: correction_request_submitted
+      description: 修正申請提出数
+      unit: Count
+      dimensions:
+        - employee_id
+        - request_type
+    
+    - name: correction_request_approved
+      description: 修正申請承認数
+      unit: Count
+      dimensions:
+        - approver_id
+        - request_type
+    
+    - name: correction_request_rejected
+      description: 修正申請却下数
+      unit: Count
+      dimensions:
+        - approver_id
+        - request_type
+    
+    - name: correction_processing_time
+      description: 修正申請処理時間
+      unit: Seconds
+      dimensions:
+        - approver_id
+        - request_type
+
+  # システムパフォーマンス関連メトリクス
+  performance:
+    - name: database_query_duration
+      description: データベースクエリ実行時間
+      unit: Milliseconds
+      dimensions:
+        - query_type
+        - table_name
+    
+    - name: api_response_time
+      description: API レスポンス時間
+      unit: Milliseconds
+      dimensions:
+        - endpoint
+        - method
+        - status_code
+    
+    - name: concurrent_users
+      description: 同時接続ユーザー数
+      unit: Count
+      dimensions:
+        - time_period
+
+  # ビジネスメトリクス
+  business:
+    - name: daily_active_users
+      description: 日別アクティブユーザー数
+      unit: Count
+      dimensions:
+        - date
+        - department
+    
+    - name: monthly_active_users
+      description: 月別アクティブユーザー数
+      unit: Count
+      dimensions:
+        - year_month
+        - department
+    
+    - name: overtime_hours
+      description: 残業時間
+      unit: Seconds
+      dimensions:
+        - employee_id
+        - date
+    
+    - name: attendance_rate
+      description: 出勤率
+      unit: Percent
+      dimensions:
+        - department
+        - year_month
+
+# アラート閾値設定
+alert_thresholds:
+  # 高優先度アラート
+  critical:
+    - metric: clock_in_failure
+      threshold: 10
+      period: 300  # 5分
+      evaluation_periods: 1
+      comparison: GreaterThanThreshold
+    
+    - metric: clock_out_failure
+      threshold: 10
+      period: 300
+      evaluation_periods: 1
+      comparison: GreaterThanThreshold
+    
+    - metric: database_query_duration
+      threshold: 5000  # 5秒
+      period: 300
+      evaluation_periods: 2
+      comparison: GreaterThanThreshold
+    
+    - metric: api_response_time
+      threshold: 10000  # 10秒
+      period: 300
+      evaluation_periods: 2
+      comparison: GreaterThanThreshold
+
+  # 中優先度アラート
+  warning:
+    - metric: correction_processing_time
+      threshold: 86400  # 24時間
+      period: 3600  # 1時間
+      evaluation_periods: 1
+      comparison: GreaterThanThreshold
+    
+    - metric: database_query_duration
+      threshold: 2000  # 2秒
+      period: 300
+      evaluation_periods: 3
+      comparison: GreaterThanThreshold
+    
+    - metric: api_response_time
+      threshold: 5000  # 5秒
+      period: 300
+      evaluation_periods: 3
+      comparison: GreaterThanThreshold
+
+  # 低優先度アラート
+  info:
+    - metric: daily_active_users
+      threshold: 5  # 最小期待ユーザー数
+      period: 86400  # 24時間
+      evaluation_periods: 1
+      comparison: LessThanThreshold
+    
+    - metric: attendance_rate
+      threshold: 80  # 80%未満
+      period: 2592000  # 30日
+      evaluation_periods: 1
+      comparison: LessThanThreshold
+
+# ダッシュボード設定
+dashboard_widgets:
+  - name: "勤怠打刻状況"
+    type: "line"
+    metrics:
+      - clock_in_success
+      - clock_in_failure
+      - clock_out_success
+      - clock_out_failure
+    period: 300
+    width: 12
+    height: 6
+
+  - name: "API パフォーマンス"
+    type: "line"
+    metrics:
+      - api_response_time
+    period: 300
+    width: 12
+    height: 6
+
+  - name: "データベースパフォーマンス"
+    type: "line"
+    metrics:
+      - database_query_duration
+    period: 300
+    width: 12
+    height: 6
+
+  - name: "アクティブユーザー数"
+    type: "number"
+    metrics:
+      - daily_active_users
+      - monthly_active_users
+    period: 86400
+    width: 6
+    height: 6
+
+  - name: "修正申請状況"
+    type: "stacked_area"
+    metrics:
+      - correction_request_submitted
+      - correction_request_approved
+      - correction_request_rejected
+    period: 3600
+    width: 12
+    height: 6
+
+  - name: "出勤率"
+    type: "gauge"
+    metrics:
+      - attendance_rate
+    period: 2592000
+    width: 6
+    height: 6
+
+# ログ監視設定
+log_monitoring:
+  patterns:
+    - name: "attendance_errors"
+      pattern: '[timestamp, requestId, level="ERROR", message="ATTENDANCE_*", ...]'
+      metric_name: "AttendanceErrors"
+      metric_value: "1"
+    
+    - name: "database_errors"
+      pattern: '[timestamp, requestId, level="ERROR", message="DATABASE_*", ...]'
+      metric_name: "DatabaseErrors"
+      metric_value: "1"
+    
+    - name: "authentication_failures"
+      pattern: '[timestamp, requestId, level="WARN", message="AUTH_FAILURE", ...]'
+      metric_name: "AuthenticationFailures"
+      metric_value: "1"
+    
+    - name: "slow_queries"
+      pattern: '[timestamp, requestId, level="WARN", message="SLOW_QUERY", duration > 2000, ...]'
+      metric_name: "SlowQueries"
+      metric_value: "1"
+
+# 通知設定
+notifications:
+  channels:
+    - type: "email"
+      endpoint: "admin@example.com"
+      severity: ["critical", "warning"]
+    
+    - type: "slack"
+      endpoint: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+      severity: ["critical"]
+    
+    - type: "sms"
+      endpoint: "+81-90-1234-5678"
+      severity: ["critical"]
+      time_restrictions:
+        - start: "09:00"
+          end: "18:00"
+          days: ["monday", "tuesday", "wednesday", "thursday", "friday"]
+
+# 自動復旧設定
+auto_recovery:
+  actions:
+    - trigger: "lambda_throttles"
+      action: "increase_concurrency"
+      parameters:
+        increment: 10
+        max_concurrency: 100
+    
+    - trigger: "database_connections_high"
+      action: "restart_lambda_functions"
+      parameters:
+        functions: ["attendance-handler", "records-handler"]
+    
+    - trigger: "api_5xx_errors"
+      action: "rollback_deployment"
+      parameters:
+        environment: "staging"  # 本番環境では手動承認が必要

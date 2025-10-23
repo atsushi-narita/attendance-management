@@ -1,0 +1,91 @@
+version: 0.2
+
+# バックエンド (Java Lambda) ビルド用 BuildSpec
+
+phases:
+  install:
+    runtime-versions:
+      java: corretto17
+    commands:
+      - echo "Installing build dependencies..."
+      - java -version
+      - echo "Java installation completed"
+
+  pre_build:
+    commands:
+      - echo "Running pre-build tasks..."
+      - cd backend
+      - echo "Setting up Gradle wrapper permissions..."
+      - chmod +x gradlew
+      - echo "Downloading dependencies..."
+      - ./gradlew dependencies
+
+  build:
+    commands:
+      - echo "Building Java Lambda functions..."
+      - ./gradlew clean build -x test
+      - echo "Running unit tests..."
+      - ./gradlew test
+      - echo "Generating test reports..."
+      - ./gradlew jacocoTestReport
+      - echo "Build completed successfully"
+
+  post_build:
+    commands:
+      - echo "Deploying Lambda functions..."
+      - |
+        echo "Updating Lambda function code..."
+        
+        # 各 Lambda 関数の JAR ファイルを更新
+        if [ -f "build/libs/attendance-handler.jar" ]; then
+          echo "Updating attendance handler..."
+          aws lambda update-function-code \
+            --function-name ${PROJECT_NAME}-${ENVIRONMENT}-attendance-handler \
+            --zip-file fileb://build/libs/attendance-handler.jar
+        fi
+        
+        if [ -f "build/libs/records-handler.jar" ]; then
+          echo "Updating records handler..."
+          aws lambda update-function-code \
+            --function-name ${PROJECT_NAME}-${ENVIRONMENT}-records-handler \
+            --zip-file fileb://build/libs/records-handler.jar
+        fi
+        
+        if [ -f "build/libs/employees-handler.jar" ]; then
+          echo "Updating employees handler..."
+          aws lambda update-function-code \
+            --function-name ${PROJECT_NAME}-${ENVIRONMENT}-employees-handler \
+            --zip-file fileb://build/libs/employees-handler.jar
+        fi
+        
+        if [ -f "build/libs/corrections-handler.jar" ]; then
+          echo "Updating corrections handler..."
+          aws lambda update-function-code \
+            --function-name ${PROJECT_NAME}-${ENVIRONMENT}-corrections-handler \
+            --zip-file fileb://build/libs/corrections-handler.jar
+        fi
+        
+        echo "Lambda functions updated successfully"
+      
+      - echo "Backend deployment completed successfully"
+
+artifacts:
+  files:
+    - 'backend/build/libs/*.jar'
+    - 'backend/build/reports/**/*'
+  name: backend-artifacts
+
+reports:
+  junit:
+    files:
+      - 'backend/build/test-results/test/*.xml'
+    file-format: JUNITXML
+  jacoco:
+    files:
+      - 'backend/build/reports/jacoco/test/jacocoTestReport.xml'
+    file-format: JACOCOXMLREPORT
+
+cache:
+  paths:
+    - 'backend/.gradle/caches/**/*'
+    - 'backend/.gradle/wrapper/**/*'

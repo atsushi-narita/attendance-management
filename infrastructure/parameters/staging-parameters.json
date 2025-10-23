@@ -1,0 +1,16 @@
+{
+  "Parameters": {
+    "Environment": "staging",
+    "ProjectName": "attendance-management",
+    "DatabasePassword": "StagingPassword123!",
+    "DatabaseInstanceClass": "db.t3.small",
+    "GitHubRepo": "your-org/attendance-management",
+    "GitHubToken": "your-github-token-here"
+  },
+  "Tags": {
+    "Environment": "staging",
+    "Project": "attendance-management",
+    "Owner": "development-team",
+    "CostCenter": "engineering"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "Parameters": {
+    "Environment": "dev",
+    "ProjectName": "attendance-management",
+    "DatabasePassword": "DevPassword123!",
+    "DatabaseInstanceClass": "db.t3.micro",
+    "GitHubRepo": "your-org/attendance-management",
+    "GitHubToken": "your-github-token-here"
+  },
+  "Tags": {
+    "Environment": "dev",
+    "Project": "attendance-management",
+    "Owner": "development-team",
+    "CostCenter": "engineering"
+  }
+}

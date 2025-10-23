@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '勤怠管理ツール - RDS PostgreSQL データベース'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: 環境名
+  
+  ProjectName:
+    Type: String
+    Default: attendance-management
+    Description: プロジェクト名
+  
+  DatabasePassword:
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Description: RDS PostgreSQL データベースパスワード
+  
+  DatabaseInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t3.small, db.t3.medium, db.r5.large]
+    Description: RDS インスタンスクラス
+
+Resources:
+  # DB Subnet Group
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub '${ProjectName}-${Environment}-db-subnet-group'
+      DBSubnetGroupDescription: Subnet group for RDS PostgreSQL
+      SubnetIds:
+        - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-1-id'
+        - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-2-id'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-db-subnet-group'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # RDS PostgreSQL Instance
+  DatabaseInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${ProjectName}-${Environment}-db'
+      DBName: attendance_management
+      Engine: postgres
+      EngineVersion: '15.4'
+      DBInstanceClass: !Ref DatabaseInstanceClass
+      AllocatedStorage: 20
+      StorageType: gp2
+      StorageEncrypted: true
+      MasterUsername: postgres
+      MasterUserPassword: !Ref DatabasePassword
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-db-sg-id'
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      BackupRetentionPeriod: !If [IsProduction, 7, 1]
+      MultiAZ: !If [IsProduction, true, false]
+      PubliclyAccessible: false
+      DeletionProtection: !If [IsProduction, true, false]
+      EnablePerformanceInsights: !If [IsProduction, true, false]
+      MonitoringInterval: !If [IsProduction, 60, 0]
+      MonitoringRoleArn: !If 
+        - IsProduction
+        - !GetAtt RDSEnhancedMonitoringRole.Arn
+        - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-db'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # RDS Enhanced Monitoring Role (for production only)
+  RDSEnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Condition: IsProduction
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole'
+      Path: /
+
+  # Database Parameter Group
+  DatabaseParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Family: postgres15
+      Description: !Sub '${ProjectName}-${Environment} PostgreSQL parameter group'
+      Parameters:
+        shared_preload_libraries: pg_stat_statements
+        log_statement: all
+        log_min_duration_statement: 1000
+        log_checkpoints: 1
+        log_connections: 1
+        log_disconnections: 1
+        log_lock_waits: 1
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-db-params'
+
+  # Secrets Manager for Database Credentials
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-db-credentials'
+      Description: Database credentials for attendance management system
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "postgres"}'
+        GenerateStringKey: 'password'
+        PasswordLength: 16
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-db-secret'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Secret Attachment to RDS
+  DatabaseSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DatabaseSecret
+      TargetId: !Ref DatabaseInstance
+      TargetType: AWS::RDS::DBInstance
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, prod]
+
+Outputs:
+  DatabaseEndpoint:
+    Description: RDS PostgreSQL Endpoint
+    Value: !GetAtt DatabaseInstance.Endpoint.Address
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-db-endpoint'
+  
+  DatabasePort:
+    Description: RDS PostgreSQL Port
+    Value: !GetAtt DatabaseInstance.Endpoint.Port
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-db-port'
+  
+  DatabaseName:
+    Description: Database Name
+    Value: attendance_management
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-db-name'
+  
+  DatabaseSecretArn:
+    Description: Database Secret ARN
+    Value: !Ref DatabaseSecret
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-db-secret-arn'

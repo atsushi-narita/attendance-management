@@ -1,0 +1,79 @@
+# Java/Gradle固有の.gitignore
+# =============================
+
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+# Java
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+
+# JVM Crash logs
+hs_err_pid*
+replay_pid*
+
+# IDE
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+
+# Eclipse
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# VS Code
+.vscode/
+
+# Spring Boot
+application-local.properties
+application-local.yml
+
+# Logs
+*.log
+logs/
+
+# Test reports
+test-results/
+test-reports/
+
+# Lambda deployment packages
+*.zip
+lambda-package/
+
+# Generated sources
+generated/
+target/generated-sources/
+
+# Database
+*.db
+*.sqlite
+*.h2.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak

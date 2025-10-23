@@ -1,0 +1,448 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Monitoring and Alerting Stack for Attendance Management System'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  StackName:
+    Type: String
+    Description: Name of the main application stack
+  
+  AlertEmail:
+    Type: String
+    Description: Email address for alerts
+    Default: admin@example.com
+  
+  SlackWebhookUrl:
+    Type: String
+    Description: Slack webhook URL for notifications (optional)
+    Default: ''
+    NoEcho: true
+
+Conditions:
+  HasSlackWebhook: !Not [!Equals [!Ref SlackWebhookUrl, '']]
+
+Resources:
+  # SNS Topic for Alerts
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${StackName}-alerts'
+      DisplayName: 'Attendance Management System Alerts'
+
+  # Email Subscription
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref AlertTopic
+      Endpoint: !Ref AlertEmail
+
+  # Lambda function for Slack notifications
+  SlackNotificationFunction:
+    Type: AWS::Lambda::Function
+    Condition: HasSlackWebhook
+    Properties:
+      FunctionName: !Sub '${StackName}-slack-notifications'
+      Runtime: python3.9
+      Handler: index.lambda_handler
+      Role: !GetAtt SlackNotificationRole.Arn
+      Environment:
+        Variables:
+          SLACK_WEBHOOK_URL: !Ref SlackWebhookUrl
+      Code:
+        ZipFile: |
+          import json
+          import urllib3
+          import os
+          
+          def lambda_handler(event, context):
+              webhook_url = os.environ['SLACK_WEBHOOK_URL']
+              
+              # Parse SNS message
+              message = json.loads(event['Records'][0]['Sns']['Message'])
+              
+              # Format Slack message
+              slack_message = {
+                  "text": f"🚨 Alert: {message.get('AlarmName', 'Unknown')}",
+                  "attachments": [
+                      {
+                          "color": "danger" if message.get('NewStateValue') == 'ALARM' else "good",
+                          "fields": [
+                              {
+                                  "title": "Alarm",
+                                  "value": message.get('AlarmName', 'Unknown'),
+                                  "short": True
+                              },
+                              {
+                                  "title": "State",
+                                  "value": message.get('NewStateValue', 'Unknown'),
+                                  "short": True
+                              },
+                              {
+                                  "title": "Reason",
+                                  "value": message.get('NewStateReason', 'No reason provided'),
+                                  "short": False
+                              }
+                          ]
+                      }
+                  ]
+              }
+              
+              # Send to Slack
+              http = urllib3.PoolManager()
+              response = http.request(
+                  'POST',
+                  webhook_url,
+                  body=json.dumps(slack_message),
+                  headers={'Content-Type': 'application/json'}
+              )
+              
+              return {
+                  'statusCode': 200,
+                  'body': json.dumps('Notification sent')
+              }
+
+  # IAM Role for Slack notification Lambda
+  SlackNotificationRole:
+    Type: AWS::IAM::Role
+    Condition: HasSlackWebhook
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # SNS Subscription for Slack
+  SlackSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasSlackWebhook
+    Properties:
+      Protocol: lambda
+      TopicArn: !Ref AlertTopic
+      Endpoint: !GetAtt SlackNotificationFunction.Arn
+
+  # Permission for SNS to invoke Lambda
+  SlackLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Condition: HasSlackWebhook
+    Properties:
+      FunctionName: !Ref SlackNotificationFunction
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref AlertTopic
+
+  # CloudWatch Dashboard
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub '${StackName}-monitoring'
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/Lambda", "Duration", "FunctionName", "${StackName}-attendance-${Environment}" ],
+                  [ ".", "Errors", ".", "." ],
+                  [ ".", "Invocations", ".", "." ]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "Lambda Performance - Attendance"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 0,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/RDS", "CPUUtilization", "DBInstanceIdentifier", "${StackName}-db-${Environment}" ],
+                  [ ".", "DatabaseConnections", ".", "." ],
+                  [ ".", "ReadLatency", ".", "." ],
+                  [ ".", "WriteLatency", ".", "." ]
+                ],
+                "period": 300,
+                "stat": "Average",
+                "region": "${AWS::Region}",
+                "title": "RDS Performance"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/ApiGateway", "Count", "ApiName", "${StackName}-api-${Environment}" ],
+                  [ ".", "Latency", ".", "." ],
+                  [ ".", "4XXError", ".", "." ],
+                  [ ".", "5XXError", ".", "." ]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "${AWS::Region}",
+                "title": "API Gateway Metrics"
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12,
+              "y": 6,
+              "width": 12,
+              "height": 6,
+              "properties": {
+                "metrics": [
+                  [ "AWS/CloudFront", "Requests", "DistributionId", "${CloudFrontDistributionId}" ],
+                  [ ".", "BytesDownloaded", ".", "." ],
+                  [ ".", "4xxErrorRate", ".", "." ],
+                  [ ".", "5xxErrorRate", ".", "." ]
+                ],
+                "period": 300,
+                "stat": "Sum",
+                "region": "us-east-1",
+                "title": "CloudFront Metrics"
+              }
+            }
+          ]
+        }
+
+  # CloudWatch Alarms
+
+  # Lambda Error Rate Alarm
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-lambda-errors-${Environment}'
+      AlarmDescription: 'High error rate in Lambda functions'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub '${StackName}-attendance-${Environment}'
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  # Lambda Duration Alarm
+  LambdaDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-lambda-duration-${Environment}'
+      AlarmDescription: 'High duration in Lambda functions'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 10000
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Sub '${StackName}-attendance-${Environment}'
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  # RDS CPU Utilization Alarm
+  RDSCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-rds-cpu-${Environment}'
+      AlarmDescription: 'High CPU utilization on RDS instance'
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 3
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub '${StackName}-db-${Environment}'
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  # RDS Connection Count Alarm
+  RDSConnectionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-rds-connections-${Environment}'
+      AlarmDescription: 'High number of database connections'
+      MetricName: DatabaseConnections
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 40
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub '${StackName}-db-${Environment}'
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  # API Gateway 4XX Error Alarm
+  APIGateway4XXAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-api-4xx-${Environment}'
+      AlarmDescription: 'High 4XX error rate in API Gateway'
+      MetricName: 4XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub '${StackName}-api-${Environment}'
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  # API Gateway 5XX Error Alarm
+  APIGateway5XXAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-api-5xx-${Environment}'
+      AlarmDescription: 'High 5XX error rate in API Gateway'
+      MetricName: 5XXError
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub '${StackName}-api-${Environment}'
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  # CloudFront Error Rate Alarm
+  CloudFrontErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-cloudfront-errors-${Environment}'
+      AlarmDescription: 'High error rate in CloudFront'
+      MetricName: 4xxErrorRate
+      Namespace: AWS/CloudFront
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DistributionId
+          Value: !Ref CloudFrontDistributionId
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+  # Custom Metrics for Application Health
+  ApplicationHealthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-app-health-${Environment}'
+      AlarmDescription: 'Application health check failure'
+      MetricName: HealthCheckFailure
+      Namespace: !Sub '${StackName}/Application'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: breaching
+
+  # Log Groups for centralized logging
+  ApplicationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${StackName}-${Environment}'
+      RetentionInDays: 30
+
+  # Log Metric Filters for Error Detection
+  ErrorLogFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref ApplicationLogGroup
+      FilterPattern: 'ERROR'
+      MetricTransformations:
+        - MetricNamespace: !Sub '${StackName}/Application'
+          MetricName: ErrorCount
+          MetricValue: '1'
+          DefaultValue: 0
+
+  # Error Count Alarm
+  ErrorCountAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${StackName}-error-count-${Environment}'
+      AlarmDescription: 'High error count in application logs'
+      MetricName: ErrorCount
+      Namespace: !Sub '${StackName}/Application'
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref AlertTopic
+      TreatMissingData: notBreaching
+
+Parameters:
+  CloudFrontDistributionId:
+    Type: String
+    Description: CloudFront Distribution ID for monitoring
+    Default: ''
+
+Outputs:
+  AlertTopicArn:
+    Description: SNS Topic ARN for alerts
+    Value: !Ref AlertTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-AlertTopicArn'
+
+  DashboardURL:
+    Description: CloudWatch Dashboard URL
+    Value: !Sub 'https://console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${StackName}-monitoring'
+    Export:
+      Name: !Sub '${AWS::StackName}-DashboardURL'
+
+  LogGroupName:
+    Description: CloudWatch Log Group Name
+    Value: !Ref ApplicationLogGroup
+    Export:
+      Name: !Sub '${AWS::StackName}-LogGroupName'

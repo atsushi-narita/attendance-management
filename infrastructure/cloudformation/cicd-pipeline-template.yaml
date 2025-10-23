@@ -1,0 +1,338 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "勤怠管理ツール - CI/CD パイプライン (CodePipeline + CodeBuild)"
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: 環境名
+
+  ProjectName:
+    Type: String
+    Default: attendance-management
+    Description: プロジェクト名
+
+  GitHubRepo:
+    Type: String
+    Description: GitHub リポジトリ名 (owner/repo)
+
+  GitHubToken:
+    Type: String
+    NoEcho: true
+    Description: GitHub Personal Access Token
+
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: GitHub ブランチ名
+
+Resources:
+  # CodeBuild Project for Infrastructure
+  InfrastructureBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-infrastructure-build"
+      Description: インフラストラクチャデプロイメント用 CodeBuild プロジェクト
+      ServiceRole:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-codebuild-role-arn"
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        EnvironmentVariables:
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+          - Name: PROJECT_NAME
+            Value: !Ref ProjectName
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+              commands:
+                - echo "Installing AWS CLI..."
+                - pip install --upgrade awscli
+            pre_build:
+              commands:
+                - echo "Validating CloudFormation templates..."
+                - cd infrastructure
+                - aws cloudformation validate-template --template-body file://cloudformation/main-template.yaml
+                - aws cloudformation validate-template --template-body file://cloudformation/cognito-template.yaml
+                - aws cloudformation validate-template --template-body file://cloudformation/database-template.yaml
+                - aws cloudformation validate-template --template-body file://cloudformation/api-gateway-template.yaml
+                - aws cloudformation validate-template --template-body file://cloudformation/iam-roles-template.yaml
+            build:
+              commands:
+                - echo "Deploying infrastructure stacks..."
+                - chmod +x deploy.sh
+                - ./deploy.sh $ENVIRONMENT
+            post_build:
+              commands:
+                - echo "Infrastructure deployment completed successfully"
+          artifacts:
+            files:
+              - '**/*'
+
+  # CodeBuild Project for Backend (Java Lambda)
+  BackendBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-backend-build"
+      Description: バックエンド (Java Lambda) ビルド用 CodeBuild プロジェクト
+      ServiceRole:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-codebuild-role-arn"
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        EnvironmentVariables:
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+          - Name: PROJECT_NAME
+            Value: !Ref ProjectName
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                java: corretto17
+              commands:
+                - echo "Installing build dependencies..."
+            pre_build:
+              commands:
+                - echo "Running pre-build tasks..."
+                - cd backend
+                - chmod +x gradlew
+            build:
+              commands:
+                - echo "Building Java Lambda functions..."
+                - ./gradlew clean build
+                - echo "Running tests..."
+                - ./gradlew test
+            post_build:
+              commands:
+                - echo "Deploying Lambda functions..."
+                - |
+                  for jar in build/libs/*.jar; do
+                    if [[ $jar == *"attendance-handler"* ]]; then
+                      aws lambda update-function-code --function-name ${PROJECT_NAME}-${ENVIRONMENT}-attendance-handler --zip-file fileb://$jar
+                    elif [[ $jar == *"records-handler"* ]]; then
+                      aws lambda update-function-code --function-name ${PROJECT_NAME}-${ENVIRONMENT}-records-handler --zip-file fileb://$jar
+                    elif [[ $jar == *"employees-handler"* ]]; then
+                      aws lambda update-function-code --function-name ${PROJECT_NAME}-${ENVIRONMENT}-employees-handler --zip-file fileb://$jar
+                    elif [[ $jar == *"corrections-handler"* ]]; then
+                      aws lambda update-function-code --function-name ${PROJECT_NAME}-${ENVIRONMENT}-corrections-handler --zip-file fileb://$jar
+                    fi
+                  done
+                - echo "Backend deployment completed successfully"
+          artifacts:
+            files:
+              - 'backend/build/libs/*.jar'
+          reports:
+            junit:
+              files:
+                - 'backend/build/test-results/test/*.xml'
+
+  # CodeBuild Project for Frontend (Nuxt.js)
+  FrontendBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-build"
+      Description: フロントエンド (Nuxt.js) ビルド用 CodeBuild プロジェクト
+      ServiceRole:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-codebuild-role-arn"
+      Artifacts:
+        Type: CODEPIPELINE
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        EnvironmentVariables:
+          - Name: ENVIRONMENT
+            Value: !Ref Environment
+          - Name: PROJECT_NAME
+            Value: !Ref ProjectName
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                nodejs: 18
+              commands:
+                - echo "Installing Node.js dependencies..."
+                - cd frontend
+                - npm ci
+            pre_build:
+              commands:
+                - echo "Setting up environment variables..."
+                - |
+                  API_URL=$(aws cloudformation describe-stacks --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-api --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' --output text)
+                  USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-cognito --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' --output text)
+                  USER_POOL_CLIENT_ID=$(aws cloudformation describe-stacks --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-cognito --query 'Stacks[0].Outputs[?OutputKey==`UserPoolClientId`].OutputValue' --output text)
+                  
+                  echo "NUXT_PUBLIC_API_URL=$API_URL" > .env
+                  echo "NUXT_PUBLIC_USER_POOL_ID=$USER_POOL_ID" >> .env
+                  echo "NUXT_PUBLIC_USER_POOL_CLIENT_ID=$USER_POOL_CLIENT_ID" >> .env
+                  echo "NUXT_PUBLIC_REGION=${AWS_DEFAULT_REGION}" >> .env
+                  echo "NUXT_PUBLIC_ENVIRONMENT=${ENVIRONMENT}" >> .env
+            build:
+              commands:
+                - echo "Building Nuxt.js application..."
+                - npm run build
+                - echo "Running tests..."
+                - npm run test:unit
+            post_build:
+              commands:
+                - echo "Deploying to S3..."
+                - BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-iam-roles --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' --output text)
+                - aws s3 sync .output/public/ s3://$BUCKET_NAME/ --delete
+                - echo "Invalidating CloudFront cache..."
+                - DISTRIBUTION_ID=$(aws cloudformation describe-stacks --stack-name ${PROJECT_NAME}-${ENVIRONMENT}-iam-roles --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' --output text)
+                - aws cloudfront create-invalidation --distribution-id $DISTRIBUTION_ID --paths "/*"
+                - echo "Frontend deployment completed successfully"
+          artifacts:
+            files:
+              - 'frontend/.output/**/*'
+
+  # CodePipeline
+  DeploymentPipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-pipeline"
+      RoleArn:
+        Fn::ImportValue: !Sub "${ProjectName}-${Environment}-codepipeline-role-arn"
+      ArtifactStore:
+        Type: S3
+        Location:
+          Fn::ImportValue: !Sub "${ProjectName}-${Environment}-artifact-bucket-name"
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: SourceAction
+              ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: "1"
+              Configuration:
+                Owner: !Select [0, !Split ["/", !Ref GitHubRepo]]
+                Repo: !Select [1, !Split ["/", !Ref GitHubRepo]]
+                Branch: !Ref GitHubBranch
+                OAuthToken: !Ref GitHubToken
+                PollForSourceChanges: false
+              OutputArtifacts:
+                - Name: SourceOutput
+
+        - Name: Infrastructure
+          Actions:
+            - Name: DeployInfrastructure
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref InfrastructureBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: InfrastructureOutput
+
+        - Name: Backend
+          Actions:
+            - Name: BuildAndDeployBackend
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref BackendBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: BackendOutput
+              RunOrder: 1
+
+        - Name: Frontend
+          Actions:
+            - Name: BuildAndDeployFrontend
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: "1"
+              Configuration:
+                ProjectName: !Ref FrontendBuildProject
+              InputArtifacts:
+                - Name: SourceOutput
+              OutputArtifacts:
+                - Name: FrontendOutput
+              RunOrder: 1
+
+  # GitHub Webhook
+  GitHubWebhook:
+    Type: AWS::CodePipeline::Webhook
+    Properties:
+      Name: !Sub "${ProjectName}-${Environment}-github-webhook"
+      Authentication: GITHUB_HMAC
+      AuthenticationConfiguration:
+        SecretToken: !Ref GitHubToken
+      Filters:
+        - JsonPath: $.ref
+          MatchEquals: !Sub "refs/heads/${GitHubBranch}"
+      TargetPipeline: !Ref DeploymentPipeline
+      TargetAction: SourceAction
+      TargetPipelineVersion: !GetAtt DeploymentPipeline.Version
+      RegisterWithThirdParty: true
+
+Outputs:
+  PipelineName:
+    Description: CodePipeline Name
+    Value: !Ref DeploymentPipeline
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-pipeline-name"
+
+  PipelineUrl:
+    Description: CodePipeline URL
+    Value: !Sub "https://console.aws.amazon.com/codesuite/codepipeline/pipelines/${DeploymentPipeline}/view"
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-pipeline-url"
+
+  InfrastructureBuildProjectName:
+    Description: Infrastructure Build Project Name
+    Value: !Ref InfrastructureBuildProject
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-infrastructure-build-name"
+
+  BackendBuildProjectName:
+    Description: Backend Build Project Name
+    Value: !Ref BackendBuildProject
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-backend-build-name"
+
+  FrontendBuildProjectName:
+    Description: Frontend Build Project Name
+    Value: !Ref FrontendBuildProject
+    Export:
+      Name: !Sub "${ProjectName}-${Environment}-frontend-build-name"

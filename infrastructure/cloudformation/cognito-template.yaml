@@ -1,0 +1,249 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '勤怠管理ツール - AWS Cognito 認証システム'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: 環境名
+  
+  ProjectName:
+    Type: String
+    Default: attendance-management
+    Description: プロジェクト名
+
+Resources:
+  # Cognito User Pool
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${ProjectName}-${Environment}-user-pool'
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: true
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: false
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Required: true
+          Mutable: true
+        - Name: employee_number
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+        - Name: role
+          AttributeDataType: String
+          Required: false
+          Mutable: true
+      UserPoolTags:
+        Environment: !Ref Environment
+        Project: !Ref ProjectName
+
+  # Cognito User Pool Client
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub '${ProjectName}-${Environment}-client'
+      UserPoolId: !Ref CognitoUserPool
+      GenerateSecret: false
+      ExplicitAuthFlows:
+        - ADMIN_NO_SRP_AUTH
+        - USER_PASSWORD_AUTH
+        - USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      SupportedIdentityProviders:
+        - COGNITO
+      CallbackURLs:
+        - !Sub 'https://${ProjectName}-${Environment}.example.com/auth/callback'
+      LogoutURLs:
+        - !Sub 'https://${ProjectName}-${Environment}.example.com/auth/logout'
+      AllowedOAuthFlows:
+        - code
+        - implicit
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - profile
+      AllowedOAuthFlowsUserPoolClient: true
+
+  # Cognito Identity Pool
+  CognitoIdentityPool:
+    Type: AWS::Cognito::IdentityPool
+    Properties:
+      IdentityPoolName: !Sub '${ProjectName}-${Environment}-identity-pool'
+      AllowUnauthenticatedIdentities: false
+      CognitoIdentityProviders:
+        - ClientId: !Ref CognitoUserPoolClient
+          ProviderName: !GetAtt CognitoUserPool.ProviderName
+
+  # Cognito Groups for Role-Based Access Control
+  EmployeesGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: employees
+      Description: 一般従業員グループ
+      UserPoolId: !Ref CognitoUserPool
+      RoleArn: !GetAtt EmployeeRole.Arn
+      Precedence: 3
+
+  ManagersGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: managers
+      Description: 管理者グループ（承認権限あり）
+      UserPoolId: !Ref CognitoUserPool
+      RoleArn: !GetAtt ManagerRole.Arn
+      Precedence: 2
+
+  AdminsGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: admins
+      Description: システム管理者グループ
+      UserPoolId: !Ref CognitoUserPool
+      RoleArn: !GetAtt AdminRole.Arn
+      Precedence: 1
+
+  # IAM Roles for Cognito Groups
+  EmployeeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-employee-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'cognito-identity.amazonaws.com:aud': !Ref CognitoIdentityPool
+              'ForAnyValue:StringLike':
+                'cognito-identity.amazonaws.com:amr': authenticated
+      Policies:
+        - PolicyName: EmployeeAttendancePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - execute-api:Invoke
+                Resource:
+                  - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/GET/api/attendance/status'
+                  - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/POST/api/attendance/clock-in'
+                  - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/POST/api/attendance/clock-out'
+                  - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/GET/api/records'
+                  - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/POST/api/corrections'
+
+  ManagerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-manager-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'cognito-identity.amazonaws.com:aud': !Ref CognitoIdentityPool
+              'ForAnyValue:StringLike':
+                'cognito-identity.amazonaws.com:amr': authenticated
+      Policies:
+        - PolicyName: ManagerAttendancePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - execute-api:Invoke
+                Resource:
+                  - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/*'
+              - Effect: Deny
+                Action:
+                  - execute-api:Invoke
+                Resource:
+                  - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/DELETE/api/employees/*'
+
+  AdminRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-admin-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: cognito-identity.amazonaws.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                'cognito-identity.amazonaws.com:aud': !Ref CognitoIdentityPool
+              'ForAnyValue:StringLike':
+                'cognito-identity.amazonaws.com:amr': authenticated
+      Policies:
+        - PolicyName: AdminAttendancePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - execute-api:Invoke
+                Resource:
+                  - !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*/*/*'
+
+  # Identity Pool Role Attachment
+  IdentityPoolRoleAttachment:
+    Type: AWS::Cognito::IdentityPoolRoleAttachment
+    Properties:
+      IdentityPoolId: !Ref CognitoIdentityPool
+      Roles:
+        authenticated: !GetAtt EmployeeRole.Arn
+
+Outputs:
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-user-pool-id'
+  
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref CognitoUserPoolClient
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-user-pool-client-id'
+  
+  IdentityPoolId:
+    Description: Cognito Identity Pool ID
+    Value: !Ref CognitoIdentityPool
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-identity-pool-id'
+  
+  EmployeeRoleArn:
+    Description: Employee Role ARN
+    Value: !GetAtt EmployeeRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-employee-role-arn'
+  
+  ManagerRoleArn:
+    Description: Manager Role ARN
+    Value: !GetAtt ManagerRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-manager-role-arn'
+  
+  AdminRoleArn:
+    Description: Admin Role ARN
+    Value: !GetAtt AdminRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-admin-role-arn'

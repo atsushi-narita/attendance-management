@@ -1,0 +1,316 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Database Infrastructure for Attendance Management System'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  DBName:
+    Type: String
+    Default: attendance_prod
+    Description: Database name
+  
+  DBUsername:
+    Type: String
+    Default: attendance_admin
+    Description: Database username
+  
+  DBPassword:
+    Type: String
+    NoEcho: true
+    Description: Database password
+    MinLength: 8
+    MaxLength: 128
+  
+  DBInstanceClass:
+    Type: String
+    Default: db.t3.micro
+    AllowedValues: [db.t3.micro, db.t3.small, db.t3.medium, db.r5.large]
+    Description: Database instance class
+  
+  DBAllocatedStorage:
+    Type: Number
+    Default: 20
+    MinValue: 20
+    MaxValue: 1000
+    Description: Database allocated storage in GB
+  
+  KMSKeyId:
+    Type: String
+    Description: KMS Key ID for encryption
+    Default: alias/aws/rds
+  
+  NetworkStackName:
+    Type: String
+    Default: attendance-network-prod
+    Description: Name of the network stack
+
+Resources:
+  # DB Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub '${AWS::StackName}-db-subnet-group'
+      DBSubnetGroupDescription: Subnet group for RDS database
+      SubnetIds:
+        - Fn::ImportValue: !Sub '${NetworkStackName}-PrivateSubnet1'
+        - Fn::ImportValue: !Sub '${NetworkStackName}-PrivateSubnet2'
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-db-subnet-group'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # DB Parameter Group
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Family: postgres15
+      Description: Parameter group for PostgreSQL 15
+      Parameters:
+        shared_preload_libraries: pg_stat_statements
+        log_statement: all
+        log_min_duration_statement: 1000
+        log_checkpoints: 1
+        log_connections: 1
+        log_disconnections: 1
+        log_lock_waits: 1
+        log_temp_files: 0
+        track_activities: 1
+        track_counts: 1
+        track_io_timing: 1
+        track_functions: all
+        max_connections: 100
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-db-parameter-group'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # RDS Instance
+  DBInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-db'
+      DBName: !Ref DBName
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: postgres
+      EngineVersion: '15.4'
+      MasterUsername: !Ref DBUsername
+      MasterUserPassword: !Ref DBPassword
+      AllocatedStorage: !Ref DBAllocatedStorage
+      StorageType: gp2
+      StorageEncrypted: true
+      KmsKeyId: !Ref KMSKeyId
+      
+      # Network Configuration
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - Fn::ImportValue: !Sub '${NetworkStackName}-DatabaseSecurityGroup'
+      
+      # Parameter and Option Groups
+      DBParameterGroupName: !Ref DBParameterGroup
+      
+      # Backup Configuration
+      BackupRetentionPeriod: 7
+      PreferredBackupWindow: '03:00-04:00'
+      PreferredMaintenanceWindow: 'sun:04:00-sun:05:00'
+      
+      # Monitoring
+      MonitoringInterval: 60
+      MonitoringRoleArn: !GetAtt EnhancedMonitoringRole.Arn
+      EnablePerformanceInsights: true
+      PerformanceInsightsRetentionPeriod: 7
+      PerformanceInsightsKMSKeyId: !Ref KMSKeyId
+      
+      # Logging
+      EnableCloudwatchLogsExports:
+        - postgresql
+      
+      # Multi-AZ for production
+      MultiAZ: !If [IsProduction, true, false]
+      
+      # Auto Minor Version Upgrade
+      AutoMinorVersionUpgrade: true
+      
+      # Deletion Protection
+      DeletionProtection: !If [IsProduction, true, false]
+      
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-db'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Enhanced Monitoring Role
+  EnhancedMonitoringRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: ''
+            Effect: Allow
+            Principal:
+              Service: monitoring.rds.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+      Path: /
+
+  # Read Replica (for production)
+  ReadReplica:
+    Type: AWS::RDS::DBInstance
+    Condition: IsProduction
+    Properties:
+      DBInstanceIdentifier: !Sub '${AWS::StackName}-db-read-replica'
+      SourceDBInstanceIdentifier: !Ref DBInstance
+      DBInstanceClass: !Ref DBInstanceClass
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-db-read-replica'
+        - Key: Environment
+          Value: !Ref Environment
+
+  # CloudWatch Alarms
+  DatabaseCPUAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-database-cpu-high'
+      AlarmDescription: Database CPU utilization is too high
+      MetricName: CPUUtilization
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DBInstance
+      AlarmActions:
+        - !Ref DatabaseAlarmTopic
+
+  DatabaseConnectionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-database-connections-high'
+      AlarmDescription: Database connection count is too high
+      MetricName: DatabaseConnections
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DBInstance
+      AlarmActions:
+        - !Ref DatabaseAlarmTopic
+
+  DatabaseFreeStorageSpaceAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub '${AWS::StackName}-database-free-storage-low'
+      AlarmDescription: Database free storage space is low
+      MetricName: FreeStorageSpace
+      Namespace: AWS/RDS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 2000000000  # 2GB in bytes
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Ref DBInstance
+      AlarmActions:
+        - !Ref DatabaseAlarmTopic
+
+  # SNS Topic for Database Alarms
+  DatabaseAlarmTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub '${AWS::StackName}-database-alarms'
+      DisplayName: Database Alarms
+
+  # Secrets Manager for Database Credentials
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${AWS::StackName}-database-credentials'
+      Description: Database credentials for attendance management system
+      GenerateSecretString:
+        SecretStringTemplate: !Sub '{"username": "${DBUsername}"}'
+        GenerateStringKey: password
+        PasswordLength: 32
+        ExcludeCharacters: '"@/\'
+      KmsKeyId: !Ref KMSKeyId
+
+  # Secret Rotation
+  SecretRotation:
+    Type: AWS::SecretsManager::RotationSchedule
+    Condition: IsProduction
+    Properties:
+      SecretId: !Ref DatabaseSecret
+      RotationLambdaArn: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:SecretsManagerRDSPostgreSQLRotationSingleUser'
+      RotationRules:
+        AutomaticallyAfterDays: 30
+
+Conditions:
+  IsProduction: !Equals [!Ref Environment, prod]
+
+Outputs:
+  DBInstanceId:
+    Description: RDS Database Instance ID
+    Value: !Ref DBInstance
+    Export:
+      Name: !Sub '${AWS::StackName}-DBInstanceId'
+
+  DBEndpoint:
+    Description: RDS Database Endpoint
+    Value: !GetAtt DBInstance.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-DBEndpoint'
+
+  DBPort:
+    Description: RDS Database Port
+    Value: !GetAtt DBInstance.Endpoint.Port
+    Export:
+      Name: !Sub '${AWS::StackName}-DBPort'
+
+  DBName:
+    Description: Database Name
+    Value: !Ref DBName
+    Export:
+      Name: !Sub '${AWS::StackName}-DBName'
+
+  DBUsername:
+    Description: Database Username
+    Value: !Ref DBUsername
+    Export:
+      Name: !Sub '${AWS::StackName}-DBUsername'
+
+  DatabaseSecretArn:
+    Description: Database Secret ARN
+    Value: !Ref DatabaseSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseSecretArn'
+
+  ReadReplicaEndpoint:
+    Condition: IsProduction
+    Description: Read Replica Endpoint
+    Value: !GetAtt ReadReplica.Endpoint.Address
+    Export:
+      Name: !Sub '${AWS::StackName}-ReadReplicaEndpoint'
+
+  DatabaseAlarmTopicArn:
+    Description: Database Alarm Topic ARN
+    Value: !Ref DatabaseAlarmTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-DatabaseAlarmTopicArn'

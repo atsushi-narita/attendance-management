@@ -1,0 +1,62 @@
+# Infrastructure固有の.gitignore
+# ================================
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+terraform.tfvars.json
+*.tfplan
+*.tfplan.*
+
+# AWS SAM
+.aws-sam/
+samconfig.toml
+
+# CloudFormation
+# 生成されたテンプレート
+*-generated.yml
+*-generated.yaml
+packaged-template.yml
+packaged-template.yaml
+
+# デプロイメント関連
+.last-backup
+deployment-*.json
+backup-*.json
+response.json
+stack-outputs.json
+cfn-response.json
+
+# 環境設定
+.env
+.env.local
+.env.production
+
+# 証明書・キー
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+*.pfx
+
+# ログ
+*.log
+deployment.log
+cloudformation.log
+
+# 一時ファイル
+*.tmp
+*.temp
+temp-*
+
+# AWS CLI設定（プロジェクト固有）
+.aws/
+aws-config/
+
+# スクリプト実行結果
+script-output/
+execution-logs/

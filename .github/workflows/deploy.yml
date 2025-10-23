@@ -1,0 +1,354 @@
+name: 勤怠管理ツール - CI/CD デプロイメント
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  PROJECT_NAME: attendance-management
+  AWS_REGION: ap-northeast-1
+
+jobs:
+  # 環境の決定
+  determine-environment:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.env.outputs.environment }}
+    steps:
+      - name: Determine Environment
+        id: env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "environment=prod" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.ref }}" == "refs/heads/develop" ]]; then
+            echo "environment=staging" >> $GITHUB_OUTPUT
+          else
+            echo "environment=dev" >> $GITHUB_OUTPUT
+          fi
+
+  # インフラストラクチャのデプロイ
+  deploy-infrastructure:
+    runs-on: ubuntu-latest
+    needs: determine-environment
+    if: github.event_name == 'push'
+    environment: ${{ needs.determine-environment.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Validate CloudFormation templates
+        run: |
+          cd infrastructure
+          for template in cloudformation/*.yaml; do
+            echo "Validating $template..."
+            aws cloudformation validate-template --template-body file://$template
+          done
+
+      - name: Deploy IAM Roles and Resources
+        run: |
+          cd infrastructure
+          aws cloudformation deploy \
+            --template-file cloudformation/iam-roles-template.yaml \
+            --stack-name ${{ env.PROJECT_NAME }}-${{ needs.determine-environment.outputs.environment }}-iam-roles \
+            --parameter-overrides file://parameters/${{ needs.determine-environment.outputs.environment }}-parameters.json \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region ${{ env.AWS_REGION }} \
+            --tags Environment=${{ needs.determine-environment.outputs.environment }} Project=${{ env.PROJECT_NAME }}
+
+      - name: Deploy Main Infrastructure
+        run: |
+          cd infrastructure
+          aws cloudformation deploy \
+            --template-file cloudformation/main-template.yaml \
+            --stack-name ${{ env.PROJECT_NAME }}-${{ needs.determine-environment.outputs.environment }}-main \
+            --parameter-overrides file://parameters/${{ needs.determine-environment.outputs.environment }}-parameters.json \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region ${{ env.AWS_REGION }} \
+            --tags Environment=${{ needs.determine-environment.outputs.environment }} Project=${{ env.PROJECT_NAME }}
+
+      - name: Deploy Cognito Authentication
+        run: |
+          cd infrastructure
+          aws cloudformation deploy \
+            --template-file cloudformation/cognito-template.yaml \
+            --stack-name ${{ env.PROJECT_NAME }}-${{ needs.determine-environment.outputs.environment }}-cognito \
+            --parameter-overrides file://parameters/${{ needs.determine-environment.outputs.environment }}-parameters.json \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region ${{ env.AWS_REGION }} \
+            --tags Environment=${{ needs.determine-environment.outputs.environment }} Project=${{ env.PROJECT_NAME }}
+
+      - name: Deploy Database
+        run: |
+          cd infrastructure
+          aws cloudformation deploy \
+            --template-file cloudformation/database-template.yaml \
+            --stack-name ${{ env.PROJECT_NAME }}-${{ needs.determine-environment.outputs.environment }}-database \
+            --parameter-overrides file://parameters/${{ needs.determine-environment.outputs.environment }}-parameters.json \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region ${{ env.AWS_REGION }} \
+            --tags Environment=${{ needs.determine-environment.outputs.environment }} Project=${{ env.PROJECT_NAME }}
+
+      - name: Deploy API Gateway and Lambda
+        run: |
+          cd infrastructure
+          aws cloudformation deploy \
+            --template-file cloudformation/api-gateway-template.yaml \
+            --stack-name ${{ env.PROJECT_NAME }}-${{ needs.determine-environment.outputs.environment }}-api \
+            --parameter-overrides file://parameters/${{ needs.determine-environment.outputs.environment }}-parameters.json \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --region ${{ env.AWS_REGION }} \
+            --tags Environment=${{ needs.determine-environment.outputs.environment }} Project=${{ env.PROJECT_NAME }}
+
+  # バックエンドのビルドとデプロイ
+  build-and-deploy-backend:
+    runs-on: ubuntu-latest
+    needs: [determine-environment, deploy-infrastructure]
+    if: github.event_name == 'push'
+    environment: ${{ needs.determine-environment.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'corretto'
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Build with Gradle
+        run: |
+          cd backend
+          chmod +x gradlew
+          ./gradlew clean build -x test
+
+      - name: Run tests
+        run: |
+          cd backend
+          ./gradlew test jacocoTestReport
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: Backend Tests
+          path: backend/build/test-results/test/*.xml
+          reporter: java-junit
+
+      - name: Deploy Lambda functions
+        run: |
+          cd backend
+          ENV=${{ needs.determine-environment.outputs.environment }}
+          
+          # 各 Lambda 関数の JAR ファイルを更新
+          for jar in build/libs/*.jar; do
+            if [[ $jar == *"attendance-handler"* ]]; then
+              aws lambda update-function-code \
+                --function-name ${{ env.PROJECT_NAME }}-${ENV}-attendance-handler \
+                --zip-file fileb://$jar
+            elif [[ $jar == *"records-handler"* ]]; then
+              aws lambda update-function-code \
+                --function-name ${{ env.PROJECT_NAME }}-${ENV}-records-handler \
+                --zip-file fileb://$jar
+            elif [[ $jar == *"employees-handler"* ]]; then
+              aws lambda update-function-code \
+                --function-name ${{ env.PROJECT_NAME }}-${ENV}-employees-handler \
+                --zip-file fileb://$jar
+            elif [[ $jar == *"corrections-handler"* ]]; then
+              aws lambda update-function-code \
+                --function-name ${{ env.PROJECT_NAME }}-${ENV}-corrections-handler \
+                --zip-file fileb://$jar
+            fi
+          done
+
+  # フロントエンドのビルドとデプロイ
+  build-and-deploy-frontend:
+    runs-on: ubuntu-latest
+    needs: [determine-environment, deploy-infrastructure]
+    if: github.event_name == 'push'
+    environment: ${{ needs.determine-environment.outputs.environment }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install dependencies
+        run: |
+          cd frontend
+          npm ci
+
+      - name: Set up environment variables
+        run: |
+          cd frontend
+          ENV=${{ needs.determine-environment.outputs.environment }}
+          
+          # CloudFormation スタックから必要な情報を取得
+          API_URL=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.PROJECT_NAME }}-${ENV}-api \
+            --query 'Stacks[0].Outputs[?OutputKey==`ApiGatewayUrl`].OutputValue' \
+            --output text)
+          
+          USER_POOL_ID=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.PROJECT_NAME }}-${ENV}-cognito \
+            --query 'Stacks[0].Outputs[?OutputKey==`UserPoolId`].OutputValue' \
+            --output text)
+          
+          USER_POOL_CLIENT_ID=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.PROJECT_NAME }}-${ENV}-cognito \
+            --query 'Stacks[0].Outputs[?OutputKey==`UserPoolClientId`].OutputValue' \
+            --output text)
+          
+          IDENTITY_POOL_ID=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.PROJECT_NAME }}-${ENV}-cognito \
+            --query 'Stacks[0].Outputs[?OutputKey==`IdentityPoolId`].OutputValue' \
+            --output text)
+          
+          # 環境変数ファイルの作成
+          cat > .env << EOF
+          NUXT_PUBLIC_API_URL=$API_URL
+          NUXT_PUBLIC_USER_POOL_ID=$USER_POOL_ID
+          NUXT_PUBLIC_USER_POOL_CLIENT_ID=$USER_POOL_CLIENT_ID
+          NUXT_PUBLIC_IDENTITY_POOL_ID=$IDENTITY_POOL_ID
+          NUXT_PUBLIC_REGION=${{ env.AWS_REGION }}
+          NUXT_PUBLIC_ENVIRONMENT=${ENV}
+          NUXT_PUBLIC_PROJECT_NAME=${{ env.PROJECT_NAME }}
+          EOF
+
+      - name: Run linting
+        run: |
+          cd frontend
+          npm run lint
+
+      - name: Run tests
+        run: |
+          cd frontend
+          npm run test:unit
+
+      - name: Build application
+        run: |
+          cd frontend
+          npm run build
+
+      - name: Deploy to S3
+        run: |
+          cd frontend
+          ENV=${{ needs.determine-environment.outputs.environment }}
+          
+          # S3 バケット名を取得
+          BUCKET_NAME=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.PROJECT_NAME }}-${ENV}-iam-roles \
+            --query 'Stacks[0].Outputs[?OutputKey==`FrontendBucketName`].OutputValue' \
+            --output text)
+          
+          # S3 に静的ファイルをアップロード
+          aws s3 sync .output/public/ s3://$BUCKET_NAME/ --delete --cache-control "max-age=31536000"
+          
+          # index.html は短いキャッシュ時間を設定
+          aws s3 cp .output/public/index.html s3://$BUCKET_NAME/index.html --cache-control "max-age=300"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          ENV=${{ needs.determine-environment.outputs.environment }}
+          
+          # CloudFront ディストリビューション ID を取得
+          DISTRIBUTION_ID=$(aws cloudformation describe-stacks \
+            --stack-name ${{ env.PROJECT_NAME }}-${ENV}-iam-roles \
+            --query 'Stacks[0].Outputs[?OutputKey==`CloudFrontDistributionId`].OutputValue' \
+            --output text)
+          
+          # CloudFront キャッシュを無効化
+          aws cloudfront create-invalidation \
+            --distribution-id $DISTRIBUTION_ID \
+            --paths "/*"
+
+  # テスト実行（プルリクエスト用）
+  test:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'corretto'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Cache Gradle packages
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Test Backend
+        run: |
+          cd backend
+          chmod +x gradlew
+          ./gradlew test jacocoTestReport
+
+      - name: Test Frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run lint
+          npm run test:unit
+
+      - name: Publish test results
+        uses: dorny/test-reporter@v1
+        if: success() || failure()
+        with:
+          name: All Tests
+          path: |
+            backend/build/test-results/test/*.xml
+            frontend/coverage/junit.xml
+          reporter: java-junit

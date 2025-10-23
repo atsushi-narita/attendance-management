@@ -1,0 +1,310 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: '勤怠管理ツール - API Gateway と Lambda 統合'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: 環境名
+  
+  ProjectName:
+    Type: String
+    Default: attendance-management
+    Description: プロジェクト名
+
+Resources:
+  # API Gateway REST API
+  AttendanceApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-api'
+      Description: 勤怠管理システム API
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      Policy:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: execute-api:Invoke
+            Resource: '*'
+
+  # API Gateway Authorizer (Cognito)
+  CognitoAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    Properties:
+      Name: !Sub '${ProjectName}-${Environment}-cognito-authorizer'
+      RestApiId: !Ref AttendanceApi
+      Type: COGNITO_USER_POOLS
+      ProviderARNs:
+        - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-user-pool-arn'
+      IdentitySource: method.request.header.Authorization
+
+  # API Resources
+  ApiResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AttendanceApi
+      ParentId: !GetAtt AttendanceApi.RootResourceId
+      PathPart: api
+
+  AttendanceResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AttendanceApi
+      ParentId: !Ref ApiResource
+      PathPart: attendance
+
+  RecordsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AttendanceApi
+      ParentId: !Ref ApiResource
+      PathPart: records
+
+  EmployeesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AttendanceApi
+      ParentId: !Ref ApiResource
+      PathPart: employees
+
+  CorrectionsResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref AttendanceApi
+      ParentId: !Ref ApiResource
+      PathPart: corrections
+
+  # Lambda Execution Role
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-lambda-execution-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DatabaseAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - rds:DescribeDBInstances
+                  - rds:DescribeDBClusters
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource:
+                  - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-db-secret-arn'
+        - PolicyName: CognitoAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cognito-idp:AdminGetUser
+                  - cognito-idp:AdminListGroupsForUser
+                  - cognito-idp:GetUser
+                Resource:
+                  - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-user-pool-arn'
+
+  # Lambda Functions (Placeholder - will be created by deployment)
+  AttendanceLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-attendance-handler'
+      Runtime: java17
+      Handler: com.attendance.handler.AttendanceHandler::handleRequest
+      Code:
+        ZipFile: |
+          // Placeholder - will be replaced by CI/CD deployment
+          public class AttendanceHandler {
+              public String handleRequest(Object input, Object context) {
+                  return "Placeholder function";
+              }
+          }
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-lambda-sg-id'
+        SubnetIds:
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-1-id'
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-2-id'
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DB_SECRET_ARN:
+            Fn::ImportValue: !Sub '${ProjectName}-${Environment}-db-secret-arn'
+          USER_POOL_ID:
+            Fn::ImportValue: !Sub '${ProjectName}-${Environment}-user-pool-id'
+
+  RecordsLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-records-handler'
+      Runtime: java17
+      Handler: com.attendance.handler.RecordHandler::handleRequest
+      Code:
+        ZipFile: |
+          // Placeholder - will be replaced by CI/CD deployment
+          public class RecordHandler {
+              public String handleRequest(Object input, Object context) {
+                  return "Placeholder function";
+              }
+          }
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-lambda-sg-id'
+        SubnetIds:
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-1-id'
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-2-id'
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DB_SECRET_ARN:
+            Fn::ImportValue: !Sub '${ProjectName}-${Environment}-db-secret-arn'
+          USER_POOL_ID:
+            Fn::ImportValue: !Sub '${ProjectName}-${Environment}-user-pool-id'
+
+  EmployeesLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-employees-handler'
+      Runtime: java17
+      Handler: com.attendance.handler.EmployeeHandler::handleRequest
+      Code:
+        ZipFile: |
+          // Placeholder - will be replaced by CI/CD deployment
+          public class EmployeeHandler {
+              public String handleRequest(Object input, Object context) {
+                  return "Placeholder function";
+              }
+          }
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-lambda-sg-id'
+        SubnetIds:
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-1-id'
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-2-id'
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DB_SECRET_ARN:
+            Fn::ImportValue: !Sub '${ProjectName}-${Environment}-db-secret-arn'
+          USER_POOL_ID:
+            Fn::ImportValue: !Sub '${ProjectName}-${Environment}-user-pool-id'
+
+  CorrectionsLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectName}-${Environment}-corrections-handler'
+      Runtime: java17
+      Handler: com.attendance.handler.CorrectionHandler::handleRequest
+      Code:
+        ZipFile: |
+          // Placeholder - will be replaced by CI/CD deployment
+          public class CorrectionHandler {
+              public String handleRequest(Object input, Object context) {
+                  return "Placeholder function";
+              }
+          }
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 512
+      VpcConfig:
+        SecurityGroupIds:
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-lambda-sg-id'
+        SubnetIds:
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-1-id'
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-2-id'
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          DB_SECRET_ARN:
+            Fn::ImportValue: !Sub '${ProjectName}-${Environment}-db-secret-arn'
+          USER_POOL_ID:
+            Fn::ImportValue: !Sub '${ProjectName}-${Environment}-user-pool-id'
+
+  # Lambda Permissions for API Gateway
+  AttendanceLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AttendanceLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub '${AttendanceApi}/*/ANY/api/attendance/*'
+
+  RecordsLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref RecordsLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub '${AttendanceApi}/*/ANY/api/records/*'
+
+  EmployeesLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref EmployeesLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub '${AttendanceApi}/*/ANY/api/employees/*'
+
+  CorrectionsLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CorrectionsLambdaFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub '${AttendanceApi}/*/ANY/api/corrections/*'
+
+  # API Gateway Deployment
+  ApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - AttendanceLambdaPermission
+      - RecordsLambdaPermission
+      - EmployeesLambdaPermission
+      - CorrectionsLambdaPermission
+    Properties:
+      RestApiId: !Ref AttendanceApi
+      StageName: !Ref Environment
+
+Outputs:
+  ApiGatewayId:
+    Description: API Gateway ID
+    Value: !Ref AttendanceApi
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-api-id'
+  
+  ApiGatewayUrl:
+    Description: API Gateway URL
+    Value: !Sub 'https://${AttendanceApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-api-url'
+  
+  LambdaExecutionRoleArn:
+    Description: Lambda Execution Role ARN
+    Value: !GetAtt LambdaExecutionRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-lambda-role-arn'
