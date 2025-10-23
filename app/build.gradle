@@ -19,6 +19,15 @@ dependencies {
     // PostgreSQL driver
     implementation 'org.postgresql:postgresql:42.7.1'
     
+    // Spring Framework dependencies
+    implementation 'org.springframework:spring-context:6.1.0'
+    implementation 'org.springframework:spring-core:6.1.0'
+    implementation 'org.springframework:spring-beans:6.1.0'
+    implementation 'org.springframework:spring-jdbc:6.1.0'
+    
+    // HikariCP connection pool
+    implementation 'com.zaxxer:HikariCP:5.1.0'
+    
     // AWS SDK dependencies
     implementation platform('software.amazon.awssdk:bom:2.21.29')
     implementation 'software.amazon.awssdk:cognitoidentityprovider'
