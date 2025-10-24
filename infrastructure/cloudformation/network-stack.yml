@@ -229,68 +229,8 @@ Resources:
       RouteTableId: !Ref PrivateRouteTable2
       SubnetId: !Ref PrivateSubnet2
 
-  # Security Groups
-  DefaultSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupName: !Sub '${AWS::StackName}-default-sg'
-      GroupDescription: Default security group for attendance management system
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
-          Description: HTTPS traffic
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
-          Description: HTTP traffic
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-default-sg'
-        - Key: Environment
-          Value: !Ref Environment
-
-  LambdaSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupName: !Sub '${AWS::StackName}-lambda-sg'
-      GroupDescription: Security group for Lambda functions
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-lambda-sg'
-        - Key: Environment
-          Value: !Ref Environment
-
-  DatabaseSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupName: !Sub '${AWS::StackName}-db-sg'
-      GroupDescription: Security group for RDS database
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-db-sg'
-        - Key: Environment
-          Value: !Ref Environment
-
-  CacheSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupName: !Sub '${AWS::StackName}-cache-sg'
-      GroupDescription: Security group for ElastiCache
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub '${AWS::StackName}-cache-sg'
-        - Key: Environment
-          Value: !Ref Environment
-
-  # Note: Security group rules will be added later via separate stack or manual configuration
-  # to avoid circular dependency issues during initial deployment
+  # Security Groups temporarily removed to isolate circular dependency issue
+  # Will be added back once network stack deploys successfully
 
 Outputs:
   VPC:
@@ -335,26 +275,5 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-PrivateSubnet2'
 
-  DefaultSecurityGroup:
-    Description: Default security group ID
-    Value: !Ref DefaultSecurityGroup
-    Export:
-      Name: !Sub '${AWS::StackName}-DefaultSecurityGroup'
-
-  LambdaSecurityGroup:
-    Description: Lambda security group ID
-    Value: !Ref LambdaSecurityGroup
-    Export:
-      Name: !Sub '${AWS::StackName}-LambdaSecurityGroup'
-
-  DatabaseSecurityGroup:
-    Description: Database security group ID
-    Value: !Ref DatabaseSecurityGroup
-    Export:
-      Name: !Sub '${AWS::StackName}-DatabaseSecurityGroup'
-
-  CacheSecurityGroup:
-    Description: Cache security group ID
-    Value: !Ref CacheSecurityGroup
-    Export:
-      Name: !Sub '${AWS::StackName}-CacheSecurityGroup'
+  # Security group outputs temporarily removed
+  # Will be added back once security groups are re-added

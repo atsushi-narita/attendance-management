@@ -98,6 +98,12 @@ Resources:
                   - cloudformation:*
                 Resource: "*"
 
+              # EC2 permissions for network infrastructure
+              - Effect: Allow
+                Action:
+                  - ec2:*
+                Resource: "*"
+
               # Lambda for deployment
               - Effect: Allow
                 Action:
