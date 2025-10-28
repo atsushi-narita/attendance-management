@@ -99,13 +99,12 @@ Resources:
       DBName: !Ref DBName
       DBInstanceClass: !Ref DBInstanceClass
       Engine: postgres
-      EngineVersion: '15.4'
+      EngineVersion: '15.8'
       MasterUsername: !Ref DBUsername
       MasterUserPassword: !Ref DBPassword
       AllocatedStorage: !Ref DBAllocatedStorage
       StorageType: gp2
       StorageEncrypted: true
-      KmsKeyId: !Ref KMSKeyId
       
       # Network Configuration
       DBSubnetGroupName: !Ref DBSubnetGroup
@@ -125,7 +124,6 @@ Resources:
       MonitoringRoleArn: !GetAtt EnhancedMonitoringRole.Arn
       EnablePerformanceInsights: true
       PerformanceInsightsRetentionPeriod: 7
-      PerformanceInsightsKMSKeyId: !Ref KMSKeyId
       
       # Logging
       EnableCloudwatchLogsExports:
@@ -250,17 +248,16 @@ Resources:
         GenerateStringKey: password
         PasswordLength: 32
         ExcludeCharacters: '"@/\'
-      KmsKeyId: !Ref KMSKeyId
 
-  # Secret Rotation
-  SecretRotation:
-    Type: AWS::SecretsManager::RotationSchedule
-    Condition: IsProduction
-    Properties:
-      SecretId: !Ref DatabaseSecret
-      RotationLambdaArn: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:SecretsManagerRDSPostgreSQLRotationSingleUser'
-      RotationRules:
-        AutomaticallyAfterDays: 30
+  # Secret Rotation (commented out - requires manual Lambda setup)
+  # SecretRotation:
+  #   Type: AWS::SecretsManager::RotationSchedule
+  #   Condition: IsProduction
+  #   Properties:
+  #     SecretId: !Ref DatabaseSecret
+  #     RotationLambdaArn: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:SecretsManagerRDSPostgreSQLRotationSingleUser'
+  #     RotationRules:
+  #       AutomaticallyAfterDays: 30
 
 Conditions:
   IsProduction: !Equals [!Ref Environment, prod]

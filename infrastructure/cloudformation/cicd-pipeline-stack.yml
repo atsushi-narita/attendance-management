@@ -247,27 +247,37 @@ Resources:
             build:
               commands:
                 - echo "Deploying infrastructure..."
-                # Deploy main infrastructure
+                # Check if network stack exists and deploy only if needed
                 - |
-                  aws cloudformation deploy \
-                    --template-file infrastructure/cloudformation/network-stack.yml \
-                    --stack-name attendance-network-${ENVIRONMENT} \
-                    --parameter-overrides Environment=${ENVIRONMENT} \
-                    --capabilities CAPABILITY_IAM \
-                    --region ${AWS_DEFAULT_REGION} \
-                    --no-fail-on-empty-changeset
+                  if ! aws cloudformation describe-stacks --stack-name attendance-network-${ENVIRONMENT} --region ${AWS_DEFAULT_REGION} >/dev/null 2>&1; then
+                    echo "Network stack does not exist, creating..."
+                    aws cloudformation deploy \
+                      --template-file infrastructure/cloudformation/network-stack.yml \
+                      --stack-name attendance-network-${ENVIRONMENT} \
+                      --parameter-overrides Environment=${ENVIRONMENT} \
+                      --capabilities CAPABILITY_IAM \
+                      --region ${AWS_DEFAULT_REGION} \
+                      --no-fail-on-empty-changeset
+                  else
+                    echo "Network stack already exists, skipping deployment"
+                  fi
                 
                 - echo "Getting database password from Parameter Store..."
                 - DB_PASSWORD=$(aws ssm get-parameter --name "/attendance-management/${ENVIRONMENT}/db-password" --with-decryption --query "Parameter.Value" --output text --region ${AWS_DEFAULT_REGION})
-                - echo "Deploying database stack..."
+                - echo "Checking database stack..."
                 - |
-                  aws cloudformation deploy \
-                    --template-file infrastructure/cloudformation/database-stack.yml \
-                    --stack-name attendance-database-${ENVIRONMENT} \
-                    --parameter-overrides Environment=${ENVIRONMENT} NetworkStackName=attendance-network-${ENVIRONMENT} DBPassword=${DB_PASSWORD} \
-                    --capabilities CAPABILITY_IAM \
-                    --region ${AWS_DEFAULT_REGION} \
-                    --no-fail-on-empty-changeset
+                  if ! aws cloudformation describe-stacks --stack-name attendance-database-${ENVIRONMENT} --region ${AWS_DEFAULT_REGION} >/dev/null 2>&1; then
+                    echo "Database stack does not exist, creating..."
+                    aws cloudformation deploy \
+                      --template-file infrastructure/cloudformation/database-stack.yml \
+                      --stack-name attendance-database-${ENVIRONMENT} \
+                      --parameter-overrides Environment=${ENVIRONMENT} NetworkStackName=attendance-network-${ENVIRONMENT} DBPassword=${DB_PASSWORD} \
+                      --capabilities CAPABILITY_IAM \
+                      --region ${AWS_DEFAULT_REGION} \
+                      --no-fail-on-empty-changeset
+                  else
+                    echo "Database stack already exists, skipping deployment"
+                  fi
                 
                 # Deploy Lambda functions
                 - echo "Deploying Lambda functions..."
