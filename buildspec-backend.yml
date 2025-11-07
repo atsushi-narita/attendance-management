@@ -14,7 +14,7 @@ phases:
   pre_build:
     commands:
       - echo "Running pre-build tasks..."
-      - cd backend
+      - cd app
       - echo "Setting up Gradle wrapper permissions..."
       - chmod +x gradlew
       - echo "Downloading dependencies..."
@@ -71,21 +71,22 @@ phases:
 
 artifacts:
   files:
-    - 'backend/build/libs/*.jar'
-    - 'backend/build/reports/**/*'
+    - 'app/build/libs/*.jar'
+    - 'app/build/distributions/*.zip'
+    - 'app/build/reports/**/*'
   name: backend-artifacts
 
 reports:
   junit:
     files:
-      - 'backend/build/test-results/test/*.xml'
+      - 'app/build/test-results/test/*.xml'
     file-format: JUNITXML
   jacoco:
     files:
-      - 'backend/build/reports/jacoco/test/jacocoTestReport.xml'
+      - 'app/build/reports/jacoco/test/jacocoTestReport.xml'
     file-format: JACOCOXMLREPORT
 
 cache:
   paths:
-    - 'backend/.gradle/caches/**/*'
-    - 'backend/.gradle/wrapper/**/*'
+    - 'app/.gradle/caches/**/*'
+    - 'app/.gradle/wrapper/**/*'
