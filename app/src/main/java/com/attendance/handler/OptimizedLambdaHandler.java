@@ -156,10 +156,10 @@ public abstract class OptimizedLambdaHandler
      * Extract user ID from JWT token (simplified)
      */
     protected String getUserId(APIGatewayProxyRequestEvent input) {
-        Map<String, Object> requestContext = input.getRequestContext();
-        if (requestContext != null) {
+        APIGatewayProxyRequestEvent.ProxyRequestContext requestContext = input.getRequestContext();
+        if (requestContext != null && requestContext.getAuthorizer() != null) {
             @SuppressWarnings("unchecked")
-            Map<String, Object> authorizer = (Map<String, Object>) requestContext.get("authorizer");
+            Map<String, Object> authorizer = (Map<String, Object>) requestContext.getAuthorizer();
             if (authorizer != null) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> claims = (Map<String, Object>) authorizer.get("claims");
@@ -175,10 +175,10 @@ public abstract class OptimizedLambdaHandler
      * Check if user has required role
      */
     protected boolean hasRole(APIGatewayProxyRequestEvent input, String requiredRole) {
-        Map<String, Object> requestContext = input.getRequestContext();
-        if (requestContext != null) {
+        APIGatewayProxyRequestEvent.ProxyRequestContext requestContext = input.getRequestContext();
+        if (requestContext != null && requestContext.getAuthorizer() != null) {
             @SuppressWarnings("unchecked")
-            Map<String, Object> authorizer = (Map<String, Object>) requestContext.get("authorizer");
+            Map<String, Object> authorizer = (Map<String, Object>) requestContext.getAuthorizer();
             if (authorizer != null) {
                 @SuppressWarnings("unchecked")
                 Map<String, Object> claims = (Map<String, Object>) authorizer.get("claims");

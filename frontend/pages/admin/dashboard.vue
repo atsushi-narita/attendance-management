@@ -223,11 +223,11 @@
       </Card>
     </div>
   </div>
-<s
-cript setup lang="ts">
-import type { Employee } from '~/types/employee'
+</template>
+
+<script setup lang="ts">
 import type { AttendanceRecord } from '~/types/attendance'
-import type { CorrectionRequest } from '~/types/correction'
+import type { Employee } from '~/types/employee'
 
 // Meta
 definePageMeta({
